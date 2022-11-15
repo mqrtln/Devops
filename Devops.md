@@ -3,6 +3,7 @@
 
 
 
+# Start 
 * [ ] Lag et spring initalizer prosjekt med kotlin og spring web 
 * [ ] Lag en Dockerfile som skal plasseres i root folderen 
 
@@ -21,8 +22,9 @@ ENTRYPOINT ["java", "-jar", "/app/application.jar"]
 ````
 
 
-* [ ] Lager et veldig basic REST api
-* [ ] Lager en .github/workflow mappe med en .yml fil f.eks ci.yml (continious integration)
+# Continous integration
+* [ ] Lag en veldig basic REST api
+* [ ] Lag en .github/workflow mappe med en .yml fil f.eks ci.yml (continious integration)
 * [ ] Push til github
 
 
@@ -58,9 +60,9 @@ jobs:
   * [ ] "Require status check to pass before merging"
 
 
-## Docker 
+# Docker 
 
-* [ ] Lag en dockerimage.yml under workflows mappen med koden
+* [ ] Lag en di_terraform.yml under workflows mappen med koden
 ````
 name: Publish Docker image
 
@@ -70,7 +72,7 @@ on:
       - master
 
 jobs:
-  push_to_registry:
+  build_docker_image:
     name: Push Docker image to ECR
     runs-on: ubuntu-latest
     steps:
@@ -88,9 +90,53 @@ jobs:
           docker tag <image tag> 244530008913.dkr.ecr.eu-west-1.amazonaws.com/<ECS-bruker>:$rev
           docker push 244530008913.dkr.ecr.eu-west-1.amazonaws.com/<ECS-bruker>:$rev
 
+// Sett dette inn hvis du skal ha terraform
+
+terraform:
+    name: "Terraform"
+    needs: build_docker_image
+    runs-on: ubuntu-latest
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_REGION: eu-west-1
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v1
+
+      - name: Terraform Format
+        id: fmt
+        run: terraform fmt -check
+
+      - name: Terraform Init
+        id: init
+        run: terraform init
+
+      - name: Terraform Validate
+        id: validate
+        run: terraform validate -no-color
+
+      - name: Terraform Plan
+        id: plan
+        if: github.event_name == 'pull_request'
+        run: terraform plan -no-color
+        continue-on-error: true
+
+      - name: Terraform Plan Status
+        if: steps.plan.outcome == 'failure'
+        run: exit 1
+
+      - name: Terraform Apply
+        if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+        run: terraform apply -var="prefix=<aws-username>" -var="image=244530008913.dkr.ecr.eu-west-1.amazonaws.com/<ECS-navnet>:latest" -auto-approve
+
 ````
 
 ## NB pass på å endre master/main basert på github branchen din og sett inn dine variabler under alle < >
+
 
 * [ ] gå inn i IAM i aws tjenesten din
   * [ ] Gp til users og finn brukeren din 
@@ -111,3 +157,65 @@ jobs:
   eu-west-1
 ```
 
+# Terraform
+ * [ ] legg til terraform koden i dockerimage.yml (den er allerede der i dette eksempelet)
+ * [ ] lag en provider.tf fil i rotmappen 
+```
+terraform {
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "3.56.0"
+    }
+  }
+  backend "s3" {
+    bucket = "pgr301-2021-terraform-state"
+    key    = "<ditt-aws-navn>/<hva-som-helst>.state"
+    region = "eu-north-1"
+  }
+}
+```
+
+* [ ] lag en s3_bucket.tf fil i rotmappen
+
+```
+resource "aws_s3_bucket" "jenka-botte" {
+  bucket = "<ny-bucket-navn>"
+}
+```
+
+* [ ] lag en variables.tf fil i rotmappen
+
+
+```
+variable "prefix" {
+  type = string
+}
+
+variable "image" {
+  type = string
+}
+```
+
+* [ ] lag en apprunner.tf fil i rotmappen
+```
+resource "aws_apprunner_service" "service" {
+  service_name = var.prefix
+
+  source_configuration {
+
+    authentication_configuration {
+      access_role_arn = "arn:aws:iam::244530008913:role/service-role/AppRunnerECRAccessRole"
+    }
+
+    image_repository {
+      image_configuration {
+        port = "8080"
+      }
+      image_identifier      = var.image
+      image_repository_type = "ECR"
+    }
+    auto_deployments_enabled = true
+  }
+}
+```
